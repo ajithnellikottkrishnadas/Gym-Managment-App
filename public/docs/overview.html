@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gym Management App - Technical Overview</title>
+  <style>
+    :root { --fg:#0f172a; --muted:#475569; --border:#e2e8f0; --bg:#ffffff; --chip:#f1f5f9; }
+    *{ box-sizing:border-box; }
+    html,body{ margin:0; padding:0; background:#f8fafc; color:var(--fg); font:14px/1.6 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; }
+    .container{ max-width:920px; margin:40px auto; background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:32px; }
+    h1{ font-size:28px; margin:0 0 8px; }
+    h2{ font-size:20px; margin:28px 0 8px; }
+    h3{ font-size:16px; margin:20px 0 6px; }
+    p,li,code,pre{ font-size:14px; }
+    code{ background:#f8fafc; border:1px solid var(--border); padding:2px 6px; border-radius:6px; }
+    pre{ background:#0b1220; color:#e2e8f0; padding:14px; border-radius:8px; overflow:auto; }
+    .grid{ display:grid; grid-template-columns: repeat(12,1fr); gap:16px; }
+    .card{ border:1px solid var(--border); border-radius:10px; padding:16px; background:var(--bg); }
+    .muted{ color:var(--muted); }
+    .list{ margin:0; padding-left:18px; }
+    .kbd{ font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; background:#111827; color:#e5e7eb; padding:2px 6px; border-radius:6px; }
+    .chips{ display:flex; flex-wrap:wrap; gap:8px; }
+    .chip{ background:var(--chip); padding:6px 10px; border-radius:999px; border:1px solid var(--border); font-size:12px; }
+    table{ width:100%; border-collapse:collapse; }
+    thead th{ text-align:left; background:#f8fafc; border-bottom:1px solid var(--border); padding:8px; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#334155; }
+    tbody td{ border-bottom:1px solid var(--border); padding:8px; }
+    .small{ font-size:12px; }
+    .section{ margin-top:24px; }
+    @media print { body{ background:#fff; } .container{ box-shadow:none; border:0; } }
+  </style>
+  <meta name="description" content="Technical overview for a Next.js + Firebase PWA Gym Management App" />
+  <meta name="theme-color" content="#0ea5e9" />
+  <link rel="manifest" href="/manifest.json" />
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1>Gym Management App - Technical Overview</h1>
+      <div class="muted small">Version 1.0</div>
+    </header>
+
+    <section class="section">
+      <h2>Tech Stack</h2>
+      <div class="chips">
+        <span class="chip">Next.js (App Router, TS)</span>
+        <span class="chip">TailwindCSS</span>
+        <span class="chip">Firebase Auth</span>
+        <span class="chip">Firestore</span>
+        <span class="chip">Axios</span>
+        <span class="chip">PWA (Manifest + SW)</span>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Key Features</h2>
+      <ul class="list">
+        <li>Trainer auth (email/password), middleware-protected dashboard.</li>
+        <li>Customer management: add (auto regNo), list, search, sort.</li>
+        <li>Payments per month: <code>{ "YYYY-MM": true|false }</code>, mark paid/unpaid.</li>
+        <li>Dashboard due analytics: days since last payment, severity (Due/Overdue/Frozen).</li>
+        <li>Customer details modal with tabs: Overview, Health, Payments, Contact.</li>
+        <li>Payment management UI: toggle month status; total due calculation.</li>
+        <li>Reports and quick stats (members, active, revenue).</li>
+        <li>PWA install + offline cache for static assets.</li>
+        <li>Firestore debug page for connectivity test.</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>Important Paths</h2>
+      <div class="grid">
+        <div class="card" style="grid-column: span 6;">
+          <h3>UI Pages</h3>
+          <ul class="list">
+            <li><code>app/page.tsx</code> Landing</li>
+            <li><code>app/login/page.tsx</code> Trainer login</li>
+            <li><code>app/dashboard/page.tsx</code> Dashboard + due members</li>
+            <li><code>app/dashboard/customers/page.tsx</code> Customers list</li>
+            <li><code>app/debug/firestore/page.tsx</code> Connectivity test</li>
+          </ul>
+        </div>
+        <div class="card" style="grid-column: span 6;">
+          <h3>Components</h3>
+          <ul class="list">
+            <li><code>components/Navbar.tsx</code>, <code>components/Sidebar.tsx</code></li>
+            <li><code>components/CustomerTable.tsx</code> table + status badges + modal</li>
+            <li><code>components/AddCustomerModal.tsx</code> multi-step registration</li>
+            <li><code>components/UserDetailsModal.tsx</code> details + payments mgmt</li>
+          </ul>
+        </div>
+        <div class="card" style="grid-column: span 6;">
+          <h3>API Routes</h3>
+          <ul class="list">
+            <li><code>pages/api/customers/add.ts</code> add customer</li>
+            <li><code>pages/api/customers/list.ts</code> list customers</li>
+            <li><code>pages/api/customers/due.ts</code> due customers</li>
+            <li><code>pages/api/customers/updatePayment.ts</code> update a month</li>
+            <li><code>pages/api/customers/[id].ts</code> get by id</li>
+          </ul>
+        </div>
+        <div class="card" style="grid-column: span 6;">
+          <h3>Infra & PWA</h3>
+          <ul class="list">
+            <li><code>lib/firebase.ts</code> Firebase init (logs projectId in dev)</li>
+            <li><code>lib/firestore.ts</code> queries, setDoc merge, error logs</li>
+            <li><code>public/manifest.json</code> manifest</li>
+            <li><code>public/sw.js</code> service worker</li>
+            <li><code>middleware.ts</code> protect <code>/dashboard/*</code></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Firestore Schema (customers)</h2>
+      <pre><code>{
+  name: string,
+  dateOfBirth: string, // YYYY-MM-DD
+  gender: 'Male' | 'Female' | 'Other',
+  profilePicture?: string,
+  phone: string,
+  email: string,
+  emergencyContactName: string,
+  emergencyContactPhone: string,
+  regNo: number,
+  joinDate: string, // YYYY-MM-DD
+  membershipType: 'Monthly' | 'Quarterly' | 'Yearly' | 'Personal Training' | 'Other',
+  membershipStartDate: string,
+  membershipEndDate: string,
+  status: 'Active' | 'Expired' | 'On Hold' | 'Suspended',
+  fee: number,
+  paymentMode: 'Cash' | 'UPI' | 'Card' | 'Bank Transfer' | 'Other',
+  paymentStatus: 'Paid' | 'Pending' | 'Overdue',
+  dueDate: string,
+  height: number,
+  weight: number,
+  bmi?: number,
+  medicalConditions?: string,
+  fitnessGoal: 'Weight Loss' | 'Muscle Gain' | 'Strength Training' | 'General Fitness' | 'Endurance' | 'Other',
+  address?: { street: string, city: string, pincode: string },
+  contact: string, // legacy; mirrors phone
+  payments: Record&lt;string, boolean&gt; // { "2025-01": true, "2025-02": false }
+}
+</code></pre>
+    </section>
+
+    <section class="section">
+      <h2>Payment Logic</h2>
+      <ul class="list">
+        <li>Each month key <code>YYYY-MM</code> = Paid/Unpaid.</li>
+        <li>Status rules: Current (0), Due (1–2), Overdue (3), Frozen (4+).</li>
+        <li>Due list sorts by severity then days since last payment.</li>
+        <li>Amount due = <code>unpaidMonths * fee</code>.</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>Error Handling & Safety</h2>
+      <ul class="list">
+        <li>All Firestore calls wrapped in try/catch with <code>[Firestore:fn] code message</code> logs.</li>
+        <li><code>setDoc(..., { merge:true })</code> avoids NOT_FOUND for new docs.</li>
+        <li><code>lib/firebase.ts</code> logs <code>projectId</code> in dev for quick env checks.</li>
+        <li><code>/debug/firestore</code> page writes/reads <code>customers/testDoc</code>.</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>Environment (.env.local)</h2>
+      <pre><code>NEXT_PUBLIC_FIREBASE_API_KEY=
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
+NEXT_PUBLIC_FIREBASE_APP_ID=
+NEXT_PUBLIC_MEASUREMENTID=
+</code></pre>
+    </section>
+
+    <section class="section">
+      <h2>Setup</h2>
+      <pre><code>npm install
+npm run dev
+</code></pre>
+      <p class="small muted">Configure <code>.env.local</code> with Firebase values. Visit <code>/login</code>, <code>/dashboard</code>, <code>/dashboard/customers</code>. Use <code>/debug/firestore</code> to verify Firestore.</p>
+    </section>
+
+    <section class="section">
+      <h2>PWA</h2>
+      <ul class="list">
+        <li>Manifest linked in <code>app/layout.tsx</code></li>
+        <li>Service worker registered at <code>/sw.js</code></li>
+        <li>Add icons at <code>public/icons/*</code> for install prompts</li>
+      </ul>
+    </section>
+
+    <footer class="section small muted">
+      Print to PDF: open this page and use <span class="kbd">Ctrl/Cmd + P</span> (enable background graphics).
+    </footer>
+  </main>
+</body>
+</html>
+
+
+

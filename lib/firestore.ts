@@ -57,7 +57,9 @@ export type Customer = {
   
   // Legacy fields for backward compatibility
   contact: string; // Keep for backward compatibility, maps to phone
-  payments: Record<string, boolean>; // Monthly payment tracking
+  payments: Record<string, boolean>; // Monthly payment tracking (true paid, false unpaid)
+  frozenMonths?: string[]; // YYYY-MM that are frozen and excluded from dues
+  paymentsAmounts: Record<string, number>; // Monthly payment amounts
 };
 
 export async function getNextRegNo(): Promise<number> {
@@ -124,11 +126,24 @@ export async function updateCustomerPayments(id: string, payments: Record<string
   }
 }
 
+export async function updateCustomerMonthlyAmount(id: string, month: string, amount: number) {
+  try {
+    const ref = doc(firestoreDb, "customers", id);
+    await setDoc(ref, { [`paymentsAmounts.${month}`]: amount }, { merge: true });
+  } catch (error: any) {
+    console.error("[Firestore:updateCustomerMonthlyAmount]", error?.code, error?.message);
+    throw error;
+  }
+}
+
 export function computeDueList(customers: Array<Customer & { id: string }>) {
   const entries = customers
     .map((c) => {
       const months = Object.entries(c.payments || {});
-      const unpaid = months.filter(([, paid]) => !paid).map(([m]) => m);
+      const frozen = new Set((c.frozenMonths || []));
+      const unpaid = months
+        .filter(([m, paid]) => !paid && !frozen.has(m))
+        .map(([m]) => m);
       const latestUnpaid = unpaid.sort().at(-1) || null;
       return latestUnpaid
         ? { customer: c, latestUnpaid }

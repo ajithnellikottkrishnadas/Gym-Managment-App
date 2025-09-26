@@ -55,6 +55,15 @@ export default function AddCustomerModal({ isOpen, onClose, onSuccess }: AddCust
   const [currentStep, setCurrentStep] = useState(1);
   const totalSteps = 4;
 
+  // Dynamic fee label based on membership type
+  const feeLabel = formData.membershipType === "Monthly"
+    ? "Monthly Fee"
+    : formData.membershipType === "Quarterly"
+      ? "Quarterly Fee"
+      : formData.membershipType === "Yearly"
+        ? "Yearly Fee"
+        : "Package Fee";
+
   // Calculate BMI
   const calculateBMI = () => {
     const height = parseFloat(formData.height);
@@ -415,13 +424,13 @@ export default function AddCustomerModal({ isOpen, onClose, onSuccess }: AddCust
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-gray-700">Monthly Fee (₹) *</label>
+                  <label className="text-sm font-medium text-gray-700">{feeLabel} (₹) *</label>
                   <Input
                     name="fee"
                     type="number"
                     value={formData.fee}
                     onChange={handleChange}
-                    placeholder="1000"
+                    placeholder={feeLabel === "Monthly Fee" ? "1000" : feeLabel === "Quarterly Fee" ? "3000" : feeLabel === "Yearly Fee" ? "12000" : "5000"}
                     min="0"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                     required

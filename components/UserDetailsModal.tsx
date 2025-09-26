@@ -21,442 +21,286 @@ interface Customer {
   regNo: number;
   joinDate: string;
   membershipType: string;
-  membershipStartDate: string;
-  membershipEndDate: string;
+  membershipStartDate?: string;
+  membershipEndDate?: string;
   status: string;
   fee: number;
-  paymentMode: string;
-  paymentStatus: string;
-  dueDate: string;
+  paymentMode?: string;
+  paymentStatus?: string;
+  dueDate?: string;
   height: number;
   weight: number;
   bmi?: number;
   medicalConditions?: string;
   fitnessGoal: string;
-  address?: {
-    street: string;
-    city: string;
-    pincode: string;
-  };
+  address?: { street: string; city: string; pincode: string };
   contact: string;
   payments: Record<string, boolean>;
+  frozenMonths?: string[];
 }
+
+// Helpers for dates
+function parseISO(d?: string) {
+  if (!d) return null;
+  const t = Date.parse(d);
+  return Number.isNaN(t) ? null : new Date(t);
+}
+function monthKey(d: Date) {
+  const y = d.getFullYear();
+  const m = (d.getMonth() + 1).toString().padStart(2, "0");
+  return `${y}-${m}`;
+}
+function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
+function endOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
+function addMonths(d: Date, n: number) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
 
 export default function UserDetailsModal({ isOpen, onClose, customerId }: UserDetailsModalProps) {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'health' | 'payments' | 'contact'>('overview');
+  const [updatingPayment, setUpdatingPayment] = useState(false);
 
-  useEffect(() => {
-    if (isOpen && customerId) {
-      fetchCustomerDetails();
-    }
-  }, [isOpen, customerId]);
+  useEffect(() => { if (isOpen && customerId) fetchCustomerDetails(); }, [isOpen, customerId]);
 
   const fetchCustomerDetails = async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/customers/${customerId}`);
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.error || 'Failed to fetch customer details');
-      }
-      
-      setCustomer(result.data);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+      const resp = await fetch(`/api/customers/${customerId}`);
+      const json = await resp.json();
+      if (!resp.ok) throw new Error(json.error || 'Failed to fetch customer');
+      setCustomer(json.data);
+    } catch (e: any) {
+      setError(e.message);
+    } finally { setLoading(false); }
   };
 
-  const handleBackdropClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) {
-      onClose();
-    }
+  const handleBackdropClick = (e: React.MouseEvent) => { if (e.target === e.currentTarget) onClose(); };
+
+  const formatDate = (s?: string) => s ? new Date(s).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A';
+  const calculateAge = (dob?: string) => {
+    if (!dob) return 'N/A';
+    const b = new Date(dob), t = new Date();
+    let a = t.getFullYear() - b.getFullYear();
+    const m = t.getMonth() - b.getMonth();
+    if (m < 0 || (m === 0 && t.getDate() < b.getDate())) a--;
+    return `${a} years`;
   };
 
-  const formatDate = (dateString: string) => {
-    if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
+  const getStatusColor = (s: string) => s === 'Active' ? 'bg-green-100 text-green-800' : s === 'Expired' ? 'bg-red-100 text-red-800' : s === 'On Hold' ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-800';
+  const getPaymentStatusColor = (s?: string) => s === 'Paid' ? 'bg-green-100 text-green-800' : s === 'Overdue' ? 'bg-red-100 text-red-800' : s === 'Pending' ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-800';
+
+  // API: tri-state updater
+  const updatePayment = async (month: string, status: 'paid' | 'unpaid' | 'frozen') => {
+    if (!customer) return;
+    setUpdatingPayment(true);
+    try {
+      const resp = await fetch('/api/customers/updatePayment', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: customer.id, month, status }),
+      });
+      if (!resp.ok) throw new Error('Failed to update payment');
+      // local update
+      setCustomer(prev => {
+        if (!prev) return prev;
+        const payments = { ...(prev.payments || {}) };
+        const frozen = new Set(prev.frozenMonths || []);
+        if (status === 'paid') { payments[month] = true; frozen.delete(month); }
+        if (status === 'unpaid') { payments[month] = false; frozen.delete(month); }
+        if (status === 'frozen') { if (!(month in payments)) payments[month] = false; frozen.add(month); }
+        return { ...prev, payments, frozenMonths: Array.from(frozen) };
+      });
+    } catch (e: any) { setError(e.message); } finally { setUpdatingPayment(false); }
   };
 
-  const calculateAge = (dateOfBirth: string) => {
-    if (!dateOfBirth) return 'N/A';
-    const today = new Date();
-    const birthDate = new Date(dateOfBirth);
-    let age = today.getFullYear() - birthDate.getFullYear();
-    const monthDiff = today.getMonth() - birthDate.getMonth();
-    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
-      age--;
+  // Build full month list from membershipStart or join month up to current month
+  const buildFullMonthRows = () => {
+    if (!customer) return [] as Array<{ key: string; start: Date; end: Date; paid: boolean; frozen: boolean }>;
+    const now = new Date();
+    const startPref = parseISO(customer.membershipStartDate || customer.joinDate) || now;
+    const start = startOfMonth(startPref);
+    const end = startOfMonth(now);
+    const rows: Array<{ key: string; start: Date; end: Date; paid: boolean; frozen: boolean }> = [];
+    const frozenSet = new Set(customer.frozenMonths || []);
+    let cur = new Date(start);
+    while (cur <= end) {
+      const key = monthKey(cur);
+      const paid = customer.payments && customer.payments[key] === true;
+      const frozen = frozenSet.has(key);
+      rows.push({ key, start: startOfMonth(cur), end: endOfMonth(cur), paid, frozen });
+      cur = addMonths(cur, 1);
     }
-    return age;
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'Active': return 'bg-green-100 text-green-800';
-      case 'Expired': return 'bg-red-100 text-red-800';
-      case 'On Hold': return 'bg-yellow-100 text-yellow-800';
-      case 'Suspended': return 'bg-gray-100 text-gray-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
-
-  const getPaymentStatusColor = (status: string) => {
-    switch (status) {
-      case 'Paid': return 'bg-green-100 text-green-800';
-      case 'Pending': return 'bg-yellow-100 text-yellow-800';
-      case 'Overdue': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
+    return rows.reverse(); // latest first
   };
 
   if (!isOpen) return null;
 
   return (
-    <div 
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-      onClick={handleBackdropClick}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={handleBackdropClick}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gradient-to-r from-blue-600 to-blue-700 text-white">
           <div className="flex items-center gap-4">
             {customer?.profilePicture ? (
-              <img 
-                src={customer.profilePicture} 
-                alt={customer.name}
-                className="w-16 h-16 rounded-full object-cover border-2 border-white"
-              />
+              <img src={customer.profilePicture} alt={customer.name} className="w-16 h-16 rounded-full object-cover border-2 border-white" />
             ) : (
-              <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center text-2xl font-bold">
-                {customer?.name?.charAt(0) || '?'}
-              </div>
+              <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center text-2xl font-bold">{customer?.name?.charAt(0) || '?'}</div>
             )}
             <div>
               <h2 className="text-2xl font-semibold">{customer?.name || 'Loading...'}</h2>
               <p className="text-blue-100">Registration #{customer?.regNo || 'N/A'}</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="text-white/80 hover:text-white transition-colors"
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
+          <button onClick={onClose} className="text-white/80 hover:text-white transition-colors">
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
           </button>
         </div>
 
         {loading && (
           <div className="flex items-center justify-center py-12">
-            <div className="flex items-center gap-2 text-gray-600">
-              <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-              Loading customer details...
-            </div>
+            <div className="flex items-center gap-2 text-gray-600"><div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>Loading customer details...</div>
           </div>
         )}
-
-        {error && (
-          <div className="p-6">
-            <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg">
-              {error}
-            </div>
-          </div>
-        )}
+        {error && (<div className="p-6"><div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg">{error}</div></div>)}
 
         {customer && (
           <>
-            {/* Tab Navigation */}
+            {/* Tabs */}
             <div className="border-b border-gray-200">
               <nav className="flex space-x-8 px-6">
-                {[
-                  { id: 'overview', label: 'Overview', icon: '👤' },
-                  { id: 'health', label: 'Health & Fitness', icon: '💪' },
-                  { id: 'payments', label: 'Payments', icon: '💰' },
-                  { id: 'contact', label: 'Contact', icon: '📞' }
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id as any)}
-                    className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                      activeTab === tab.id
-                        ? 'border-blue-500 text-blue-600'
-                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                    }`}
-                  >
-                    <span className="mr-2">{tab.icon}</span>
-                    {tab.label}
-                  </button>
+                {[{ id: 'overview', label: 'Overview', icon: '👤' }, { id: 'health', label: 'Health & Fitness', icon: '💪' }, { id: 'payments', label: 'Payments', icon: '💰' }, { id: 'contact', label: 'Contact', icon: '📞' }].map(t => (
+                  <button key={t.id} onClick={() => setActiveTab(t.id as any)} className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${activeTab === t.id ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}><span className="mr-2">{t.icon}</span>{t.label}</button>
                 ))}
               </nav>
             </div>
 
-            {/* Tab Content */}
-            <div className="p-6 max-h-[60vh] overflow-y-auto">
-              {/* Overview Tab */}
+            {/* Content */}
+            <div className="p-6 max-h-[70vh] overflow-y-auto">
               {activeTab === 'overview' && (
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-4">
                       <h3 className="text-lg font-semibold text-gray-900">Personal Information</h3>
                       <div className="space-y-3">
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Full Name:</span>
-                          <span className="font-medium">{customer.name}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Date of Birth:</span>
-                          <span className="font-medium">{formatDate(customer.dateOfBirth)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Age:</span>
-                          <span className="font-medium">{calculateAge(customer.dateOfBirth)} years</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Gender:</span>
-                          <span className="font-medium">{customer.gender}</span>
-                        </div>
+                        <div className="flex justify-between"><span className="text-gray-600">Full Name:</span><span className="font-medium">{customer.name}</span></div>
+                        <div className="flex justify-between"><span className="text-gray-600">Date of Birth:</span><span className="font-medium">{formatDate(customer.dateOfBirth)}</span></div>
+                        <div className="flex justify-between"><span className="text-gray-600">Age:</span><span className="font-medium">{calculateAge(customer.dateOfBirth)}</span></div>
+                        <div className="flex justify-between"><span className="text-gray-600">Gender:</span><span className="font-medium">{customer.gender}</span></div>
                       </div>
                     </div>
-
                     <div className="space-y-4">
                       <h3 className="text-lg font-semibold text-gray-900">Membership Details</h3>
                       <div className="space-y-3">
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Membership Type:</span>
-                          <span className="font-medium">{customer.membershipType}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Join Date:</span>
-                          <span className="font-medium">{formatDate(customer.joinDate)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Start Date:</span>
-                          <span className="font-medium">{formatDate(customer.membershipStartDate)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">End Date:</span>
-                          <span className="font-medium">{formatDate(customer.membershipEndDate)}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-gray-600">Status:</span>
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(customer.status)}`}>
-                            {customer.status}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-semibold text-gray-900">Payment Information</h3>
-                      <div className="space-y-3">
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Monthly Fee:</span>
-                          <span className="font-medium">₹{customer.fee.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Payment Mode:</span>
-                          <span className="font-medium">{customer.paymentMode}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-gray-600">Payment Status:</span>
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(customer.paymentStatus)}`}>
-                            {customer.paymentStatus}
-                          </span>
-                        </div>
-                        {customer.dueDate && (
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Due Date:</span>
-                            <span className="font-medium">{formatDate(customer.dueDate)}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-semibold text-gray-900">Fitness Goals</h3>
-                      <div className="space-y-3">
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Primary Goal:</span>
-                          <span className="font-medium">{customer.fitnessGoal}</span>
-                        </div>
-                        {customer.medicalConditions && (
-                          <div>
-                            <span className="text-gray-600 block mb-2">Medical Conditions:</span>
-                            <p className="text-sm text-gray-700 bg-gray-50 p-3 rounded-lg">
-                              {customer.medicalConditions}
-                            </p>
-                          </div>
-                        )}
+                        <div className="flex justify-between"><span className="text-gray-600">Membership Type:</span><span className="font-medium">{customer.membershipType}</span></div>
+                        <div className="flex justify-between"><span className="text-gray-600">Join Date:</span><span className="font-medium">{formatDate(customer.joinDate)}</span></div>
+                        <div className="flex justify-between items-center"><span className="text-gray-600">Status:</span><span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(customer.status)}`}>{customer.status}</span></div>
                       </div>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Health & Fitness Tab */}
               {activeTab === 'health' && (
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="bg-blue-50 p-4 rounded-lg">
-                      <h4 className="font-semibold text-blue-900 mb-2">Height</h4>
-                      <p className="text-2xl font-bold text-blue-600">{customer.height} cm</p>
-                    </div>
-                    <div className="bg-green-50 p-4 rounded-lg">
-                      <h4 className="font-semibold text-green-900 mb-2">Weight</h4>
-                      <p className="text-2xl font-bold text-green-600">{customer.weight} kg</p>
-                    </div>
-                    <div className="bg-purple-50 p-4 rounded-lg">
-                      <h4 className="font-semibold text-purple-900 mb-2">BMI</h4>
-                      <p className="text-2xl font-bold text-purple-600">
-                        {customer.bmi ? customer.bmi.toFixed(1) : 'N/A'}
-                      </p>
-                    </div>
+                    <div className="bg-blue-50 p-4 rounded-lg"><h4 className="font-semibold text-blue-900 mb-2">Height</h4><p className="text-2xl font-bold text-blue-600">{customer.height} cm</p></div>
+                    <div className="bg-green-50 p-4 rounded-lg"><h4 className="font-semibold text-green-900 mb-2">Weight</h4><p className="text-2xl font-bold text-green-600">{customer.weight} kg</p></div>
+                    <div className="bg-purple-50 p-4 rounded-lg"><h4 className="font-semibold text-purple-900 mb-2">BMI</h4><p className="text-2xl font-bold text-purple-600">{customer.bmi ? customer.bmi.toFixed(1) : 'N/A'}</p></div>
                   </div>
-
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-semibold text-gray-900">Fitness Information</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Fitness Goal</label>
-                        <p className="mt-1 text-lg font-medium">{customer.fitnessGoal}</p>
-                      </div>
-                      {customer.medicalConditions && (
-                        <div>
-                          <label className="text-sm font-medium text-gray-600">Medical Conditions</label>
-                          <p className="mt-1 text-sm text-gray-700 bg-gray-50 p-3 rounded-lg">
-                            {customer.medicalConditions}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
                   {customer.address && (customer.address.street || customer.address.city || customer.address.pincode) && (
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-semibold text-gray-900">Address</h3>
-                      <div className="bg-gray-50 p-4 rounded-lg">
-                        <p className="text-sm text-gray-700">
-                          {customer.address.street && `${customer.address.street}, `}
-                          {customer.address.city && `${customer.address.city}, `}
-                          {customer.address.pincode && customer.address.pincode}
-                        </p>
-                      </div>
-                    </div>
+                    <div className="space-y-4"><h3 className="text-lg font-semibold text-gray-900">Address</h3><div className="bg-gray-50 p-4 rounded-lg"><p className="text-sm text-gray-700">{customer.address.street && `${customer.address.street}, `}{customer.address.city && `${customer.address.city}, `}{customer.address.pincode && customer.address.pincode}</p></div></div>
                   )}
                 </div>
               )}
 
-              {/* Payments Tab */}
               {activeTab === 'payments' && (
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-4">
                       <h3 className="text-lg font-semibold text-gray-900">Payment Details</h3>
                       <div className="space-y-3">
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Monthly Fee:</span>
-                          <span className="font-medium text-lg">₹{customer.fee.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Payment Mode:</span>
-                          <span className="font-medium">{customer.paymentMode}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-gray-600">Status:</span>
-                          <span className={`px-3 py-1 rounded-full text-sm font-medium ${getPaymentStatusColor(customer.paymentStatus)}`}>
-                            {customer.paymentStatus}
-                          </span>
-                        </div>
-                        {customer.dueDate && (
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Due Date:</span>
-                            <span className="font-medium">{formatDate(customer.dueDate)}</span>
-                          </div>
-                        )}
+                        <div className="flex justify-between"><span className="text-gray-600">Monthly Fee:</span><span className="font-medium text-lg">₹{customer.fee.toLocaleString()}</span></div>
+                        <div className="flex justify-between"><span className="text-gray-600">Payment Mode:</span><span className="font-medium">{customer.paymentMode || '—'}</span></div>
+                        <div className="flex justify-between items-center"><span className="text-gray-600">Payment Status:</span><span className={`px-3 py-1 rounded-full text-sm font-medium ${getPaymentStatusColor(customer.paymentStatus || 'Pending')}`}>{customer.paymentStatus || 'Pending'}</span></div>
                       </div>
                     </div>
-
                     <div className="space-y-4">
-                      <h3 className="text-lg font-semibold text-gray-900">Payment History</h3>
-                      <div className="space-y-2">
-                        {Object.keys(customer.payments).length > 0 ? (
-                          Object.entries(customer.payments)
-                            .sort(([a], [b]) => b.localeCompare(a))
-                            .map(([month, paid]) => (
-                              <div key={month} className="flex justify-between items-center py-2 px-3 bg-gray-50 rounded-lg">
-                                <span className="font-medium">{month}</span>
-                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                                  paid ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                                }`}>
-                                  {paid ? 'Paid' : 'Unpaid'}
-                                </span>
-                              </div>
-                            ))
-                        ) : (
-                          <p className="text-gray-500 text-sm">No payment history available</p>
-                        )}
+                      <h3 className="text-lg font-semibold text-gray-900">Summary</h3>
+                      <div className="bg-gray-50 p-4 rounded-lg">
+                        {(() => {
+                          const payments = customer.payments || {};
+                          const paidMonths = Object.values(payments).filter(Boolean).length;
+                          const unpaidMonths = Object.values(payments).filter(p => !p).length;
+                          const totalMonths = buildFullMonthRows().length;
+                          const frozen = (customer.frozenMonths || []).length;
+                          return (
+                            <div className="space-y-2">
+                              <div className="flex justify-between"><span className="text-gray-600">Total Months:</span><span className="font-medium">{totalMonths}</span></div>
+                              <div className="flex justify-between"><span className="text-gray-600">Paid:</span><span className="font-medium text-green-600">{paidMonths}</span></div>
+                              <div className="flex justify-between"><span className="text-gray-600">Unpaid:</span><span className="font-medium text-red-600">{unpaidMonths}</span></div>
+                              <div className="flex justify-between"><span className="text-gray-600">Frozen:</span><span className="font-medium text-gray-700">{frozen}</span></div>
+                              <div className="flex justify-between border-t pt-2"><span className="text-gray-600">Total Due:</span><span className="font-medium text-lg">₹{(unpaidMonths * customer.fee).toLocaleString()}</span></div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-semibold text-gray-900">Payment History & Management</h3>
+                    <div className="bg-white border rounded-lg overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-200">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Period</th>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Method</th>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            {buildFullMonthRows().map((row) => (
+                              <tr key={row.key} className="hover:bg-gray-50">
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                  {row.start.toLocaleDateString('en-GB')} - {row.end.toLocaleDateString('en-GB')}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${row.frozen ? 'bg-gray-100 text-gray-800' : row.paid ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                    {row.frozen ? 'Frozen' : row.paid ? 'Paid' : 'Unpaid'}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{customer.paymentMode || '—'}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">₹{customer.fee.toLocaleString()}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 flex gap-2">
+                                  <button onClick={() => updatePayment(row.key, 'paid')} disabled={updatingPayment} className="px-3 py-1 rounded text-xs font-medium bg-green-100 text-green-700 hover:bg-green-200 disabled:opacity-50">Mark Paid</button>
+                                  <button onClick={() => updatePayment(row.key, 'unpaid')} disabled={updatingPayment} className="px-3 py-1 rounded text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-50">Mark Unpaid</button>
+                                  <button onClick={() => updatePayment(row.key, 'frozen')} disabled={updatingPayment} className="px-3 py-1 rounded text-xs font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-50">Frozen</button>
+                                </td>
+                              </tr>
+                            ))}
+                            {buildFullMonthRows().length === 0 && (
+                              <tr><td colSpan={5} className="px-6 py-4 text-center text-sm text-gray-500">No months to show</td></tr>
+                            )}
+                          </tbody>
+                        </table>
                       </div>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Contact Tab */}
               {activeTab === 'contact' && (
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-semibold text-gray-900">Primary Contact</h3>
-                      <div className="space-y-3">
-                        <div>
-                          <label className="text-sm font-medium text-gray-600">Phone Number</label>
-                          <p className="mt-1 text-lg font-medium">{customer.phone}</p>
-                        </div>
-                        <div>
-                          <label className="text-sm font-medium text-gray-600">Email Address</label>
-                          <p className="mt-1 text-lg font-medium">{customer.email}</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-semibold text-gray-900">Emergency Contact</h3>
-                      <div className="space-y-3">
-                        <div>
-                          <label className="text-sm font-medium text-gray-600">Emergency Contact Name</label>
-                          <p className="mt-1 text-lg font-medium">{customer.emergencyContactName || 'N/A'}</p>
-                        </div>
-                        <div>
-                          <label className="text-sm font-medium text-gray-600">Emergency Contact Phone</label>
-                          <p className="mt-1 text-lg font-medium">{customer.emergencyContactPhone || 'N/A'}</p>
-                        </div>
-                      </div>
-                    </div>
+                    <div className="space-y-4"><h3 className="text-lg font-semibold text-gray-900">Primary Contact</h3><div className="space-y-3"><div><label className="text-sm font-medium text-gray-600">Phone Number</label><p className="mt-1 text-lg font-medium">{customer.phone}</p></div><div><label className="text-sm font-medium text-gray-600">Email Address</label><p className="mt-1 text-lg font-medium">{customer.email}</p></div></div></div>
+                    <div className="space-y-4"><h3 className="text-lg font-semibold text-gray-900">Emergency Contact</h3><div className="space-y-3"><div><label className="text-sm font-medium text-gray-600">Emergency Contact Name</label><p className="mt-1 text-lg font-medium">{customer.emergencyContactName || 'N/A'}</p></div><div><label className="text-sm font-medium text-gray-600">Emergency Contact Phone</label><p className="mt-1 text-lg font-medium">{customer.emergencyContactPhone || 'N/A'}</p></div></div></div>
                   </div>
                 </div>
               )}
-            </div>
-
-            {/* Footer */}
-            <div className="flex justify-end gap-3 p-6 border-t border-gray-200 bg-gray-50">
-              <Button
-                onClick={onClose}
-                className="bg-gray-500 hover:bg-gray-600 text-white"
-              >
-                Close
-              </Button>
             </div>
           </>
         )}
