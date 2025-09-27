@@ -17,6 +17,7 @@ type Customer = {
   membershipEndDate?: string;
   paymentMode?: string;
   paymentStatus?: string;
+  frozenMonths?: string[];
 };
 
 // Validate YYYY-MM-DD string and return Date or null
@@ -74,9 +75,16 @@ export default function DashboardHome() {
   const { totalMembers, activeMembers, monthlyRevenue, dueMembers } = useMemo(() => {
     const totalMembers = customers.length;
     const activeMembers = customers.filter(c => (c.status || "Active") === "Active").length;
-    const monthlyRevenue = customers.reduce((sum, c) => sum + (c.fee || 0), 0);
-
+    // Revenue should reflect only PAID entries for the current month
     const now = new Date();
+    const curMm = `${now.getFullYear()}-${(now.getMonth()+1).toString().padStart(2, "0")}`;
+    const monthlyRevenue = customers.reduce((sum, c: any) => {
+      const paid = c.payments && c.payments[curMm] === true;
+      if (!paid) return sum;
+      const amounts = (c as any).paymentsAmounts || {};
+      const amount = typeof amounts[curMm] === "number" ? amounts[curMm] : (c.fee || 0);
+      return sum + amount;
+    }, 0);
 
     const computed = customers
       .map((c) => {
@@ -87,15 +95,27 @@ export default function DashboardHome() {
 
         const payments = c.payments || {};
         const fullMonths = listMonths(rangeStart, rangeEnd);
-        const unpaidMonths = fullMonths.filter((mm) => payments[mm] !== true).sort().reverse();
+        const frozen = new Set((c.frozenMonths || []));
+        // Compute dues from the full membership range, excluding frozen months
+        const unpaidAsc = fullMonths
+          .filter((mm) => {
+            const hasRecord = Object.prototype.hasOwnProperty.call(payments, mm);
+            const recordedPaid = payments[mm] === true;
+            const isStartMonth = mm === `${rangeStart.getFullYear()}-${(rangeStart.getMonth()+1).toString().padStart(2,"0")}`;
+            const implicitPaid = !hasRecord && isStartMonth && (c.paymentStatus === "Paid");
+            return !(recordedPaid || implicitPaid) && !frozen.has(mm);
+          })
+          .sort();
+        const unpaidMonths = [...unpaidAsc].sort().reverse();
 
-        const paidMonths = fullMonths.filter((mm) => payments[mm] === true);
-        const lastPaidMonth = paidMonths.sort().reverse()[0];
+        // Days due should be counted from the first unpaid month (or next month after last paid)
         let daysSinceLastPayment = 0;
-        if (lastPaidMonth) {
-          const lastPaidDate = new Date(lastPaidMonth + "-01");
-          daysSinceLastPayment = Math.floor((now.getTime() - lastPaidDate.getTime()) / (1000 * 60 * 60 * 24));
+        if (unpaidAsc.length > 0) {
+          const firstUnpaidMonth = unpaidAsc[0];
+          const firstUnpaidDate = new Date(firstUnpaidMonth + "-01");
+          daysSinceLastPayment = Math.floor((now.getTime() - firstUnpaidDate.getTime()) / (1000 * 60 * 60 * 24));
         } else {
+          // No dues in range; use range start as baseline
           daysSinceLastPayment = Math.floor((now.getTime() - rangeStart.getTime()) / (1000 * 60 * 60 * 24));
         }
 

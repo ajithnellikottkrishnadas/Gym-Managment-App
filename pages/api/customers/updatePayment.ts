@@ -17,6 +17,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const frozen = new Set<string>(customer.frozenMonths || []);
     const paymentsAmounts = { ...(customer as any).paymentsAmounts } || {} as Record<string, number>;
 
+    // Disallow setting first month to unpaid
+    const startYm = (() => {
+      const d = new Date(customer.membershipStartDate || customer.joinDate);
+      if (isNaN(d.getTime())) return null;
+      const ym = `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,'0')}`;
+      return ym;
+    })();
+
+    if ((status === 'unpaid' || status === 'frozen') && startYm && month === startYm) {
+      return res.status(400).json({ error: 'First month cannot be marked unpaid or frozen' });
+    }
+
     if (status === 'paid') {
       payments[month] = true;
       frozen.delete(month);

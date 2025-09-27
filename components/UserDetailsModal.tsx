@@ -53,6 +53,12 @@ function monthKey(d: Date) {
 function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function endOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth() + 1, 0); }
 function addMonths(d: Date, n: number) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
+function startMonthKeyFromCustomer(c?: Customer | null) {
+  if (!c) return null;
+  const pref = parseISO(c.membershipStartDate || c.joinDate);
+  if (!pref) return null;
+  return monthKey(startOfMonth(pref));
+}
 
 export default function UserDetailsModal({ isOpen, onClose, customerId }: UserDetailsModalProps) {
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -94,11 +100,16 @@ export default function UserDetailsModal({ isOpen, onClose, customerId }: UserDe
   // API: tri-state updater
   const updatePayment = async (month: string, status: 'paid' | 'unpaid' | 'frozen') => {
     if (!customer) return;
+    // Guard: do not allow first month to be marked unpaid
+    const startKey = startMonthKeyFromCustomer(customer);
+    if (status === 'unpaid' && startKey && month === startKey) {
+      return; // silently ignore on client; API also enforces
+    }
     setUpdatingPayment(true);
     try {
       const resp = await fetch('/api/customers/updatePayment', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: customer.id, month, status }),
+        body: JSON.stringify({ id: customer.id, month, status, amount: customer.fee }),
       });
       if (!resp.ok) throw new Error('Failed to update payment');
       // local update
@@ -123,10 +134,13 @@ export default function UserDetailsModal({ isOpen, onClose, customerId }: UserDe
     const end = startOfMonth(now);
     const rows: Array<{ key: string; start: Date; end: Date; paid: boolean; frozen: boolean }> = [];
     const frozenSet = new Set(customer.frozenMonths || []);
+    const startKey = monthKey(start);
     let cur = new Date(start);
     while (cur <= end) {
       const key = monthKey(cur);
-      const paid = customer.payments && customer.payments[key] === true;
+      const explicitPaid = customer.payments && customer.payments[key] === true;
+      // Fallback: if there is no explicit payment record for the start month but status is Paid, treat it as paid
+      const paid = explicitPaid || ((!(customer.payments && key in customer.payments)) && key === startKey && (customer.paymentStatus === 'Paid'));
       const frozen = frozenSet.has(key);
       rows.push({ key, start: startOfMonth(cur), end: endOfMonth(cur), paid, frozen });
       cur = addMonths(cur, 1);
@@ -263,7 +277,10 @@ export default function UserDetailsModal({ isOpen, onClose, customerId }: UserDe
                             </tr>
                           </thead>
                           <tbody className="bg-white divide-y divide-gray-200">
-                            {buildFullMonthRows().map((row) => (
+                            {buildFullMonthRows().map((row) => {
+                              const startKey = startMonthKeyFromCustomer(customer);
+                              const disableFirstMonth = startKey === row.key;
+                              return (
                               <tr key={row.key} className="hover:bg-gray-50">
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                                   {row.start.toLocaleDateString('en-GB')} - {row.end.toLocaleDateString('en-GB')}
@@ -277,11 +294,12 @@ export default function UserDetailsModal({ isOpen, onClose, customerId }: UserDe
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">₹{customer.fee.toLocaleString()}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 flex gap-2">
                                   <button onClick={() => updatePayment(row.key, 'paid')} disabled={updatingPayment} className="px-3 py-1 rounded text-xs font-medium bg-green-100 text-green-700 hover:bg-green-200 disabled:opacity-50">Mark Paid</button>
-                                  <button onClick={() => updatePayment(row.key, 'unpaid')} disabled={updatingPayment} className="px-3 py-1 rounded text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-50">Mark Unpaid</button>
-                                  <button onClick={() => updatePayment(row.key, 'frozen')} disabled={updatingPayment} className="px-3 py-1 rounded text-xs font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-50">Frozen</button>
+                                  <button onClick={() => updatePayment(row.key, 'unpaid')} disabled={updatingPayment || disableFirstMonth} className="px-3 py-1 rounded text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-50" title={disableFirstMonth ? 'Cannot mark first month as unpaid' : undefined}>Mark Unpaid</button>
+                                  <button onClick={() => updatePayment(row.key, 'frozen')} disabled={updatingPayment || disableFirstMonth} className="px-3 py-1 rounded text-xs font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-50" title={disableFirstMonth ? 'Cannot freeze the first month' : undefined}>Frozen</button>
                                 </td>
                               </tr>
-                            ))}
+                              );
+                            })}
                             {buildFullMonthRows().length === 0 && (
                               <tr><td colSpan={5} className="px-6 py-4 text-center text-sm text-gray-500">No months to show</td></tr>
                             )}
