@@ -150,11 +150,9 @@ export default function DashboardHome() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-br from-gray-50 to-gray-100">
-      <Navbar />
-      <div className="flex flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 gap-6 py-8">
-        <Sidebar />
-        <main className="flex-1">
+     <div className="flex min-h-screen">
+
+      <main className="flex-1 p-8">
           <h1 className="text-3xl font-extrabold text-gray-800 tracking-tight mb-8">Dashboard Overview</h1>
 
           <div className="grid gap-6 md:grid-cols-3">
@@ -242,6 +240,5 @@ export default function DashboardHome() {
           </div>
         </main>
       </div>
-    </div>
   );
 }
